@@ -77,8 +77,8 @@ local SpeedEnabled      = false
 local BaseSpeed         = 16
 local TriggerBotActive  = false
 local LastTriggerShot   = 0
-local CamLockActive     = false
-local CamLockTarget     = nil
+local CamLockActive     = false -- kept for HUD compatibility (camera lock removed)
+local CamLockTarget     = nil   -- kept for HUD compatibility (camera lock removed)
 local SuperJumpActive   = false
 local SuperJumpCooldown = false
 local isMouseDown       = false
@@ -345,7 +345,7 @@ local function GetSilentAimData()
     if not sa["Enabled"] then return nil end
     local target
     if IS_ACCURACY then
-        target = CamLockTarget or SelectedTarget
+        target = SelectedTarget or CurrentTarget
         if not target or not target.Character then return nil end
         if PlayerDead(target) or PlayerKnocked(target) then return nil end
         local mp   = UserInputService:GetMouseLocation()
@@ -387,7 +387,7 @@ setreadonly(grm, true)
 local function ShouldRedirect()
     if not sa["Enabled"] then return false end
     if IS_ACCURACY then
-        local fb = CamLockTarget or SelectedTarget
+        local fb = SelectedTarget or CurrentTarget
         return fb and fb.Character and not PlayerDead(fb) and not PlayerKnocked(fb)
     end
     if not SilentAimActive or not CurrentTarget or not CurrentTarget.Character then return false end
@@ -432,18 +432,11 @@ pcall(function()
     local orig = GH.getAim
     GH.getAim = function(origin, range)
         if sa["Enabled"] and ShouldRedirect() then
-            local mp = UserInputService:GetMouseLocation()
-            local best, bd = nil, huge
-            for _, p in pairs(Players:GetPlayers()) do
-                if p == LocalPlayer or not p.Character then continue end
-                local head = p.Character:FindFirstChild("Head")
-                if not head or PlayerDead(p) or PlayerKnocked(p) then continue end
-                local sp, on = Camera:WorldToViewportPoint(head.Position)
-                if not on or sp.Z <= 0 then continue end
-                local d = sqrt((sp.X-mp.X)^2+(sp.Y-mp.Y)^2)
-                if d < bd then bd = d; best = head end
+            local _, pos = GetSilentAimData()
+            if pos then
+                local dir = pos - origin
+                return dir.Unit, math.min(dir.Magnitude, range)
             end
-            if best then local dir = best.Position - origin; return dir.Unit, math.min(dir.Magnitude, range) end
         end
         return orig(origin, range)
     end
@@ -574,82 +567,8 @@ if spreadMods["Enabled"] then
     end)
 end
 
--- ============================================================================
--- CAMERA LOCK
--- ============================================================================
-local CLFov = Drawing.new("Circle")
-CLFov.Filled = false; CLFov.Transparency = 1; CLFov.Thickness = 1
-CLFov.Color = Color3.fromRGB(255,255,0); CLFov.NumSides = 1000; CLFov.Visible = false
-
-local function CLPrediction()
-    if not cl["FOV"] then return 0.15038 end
-    local ping = GetPing() * 1000
-    if ping < 40  then return 0.145
-    elseif ping < 80  then return 0.133
-    elseif ping < 120 then return 0.120
-    elseif ping < 160 then return 0.18
-    elseif ping < 205 then return 1.0
-    else return 1.4 end
-end
-
-local function CLGetClosest()
-    local fov = cl["FOV"] or {}
-    local fovOn = fov["Enabled"]
-    local fovSz = fovOn and (clFOVSize and clFOVSize() or 55) * 2 or huge
-    -- read size from config
-    if fovOn then
-        local t = fov["Type"] or "3D"
-        if t == "2D" then fovSz = ((fov["2D"] or {})["X"] or 20) * 2
-        else fovSz = ((fov["3D"] or {})["X"] or 9) * 2 end
-    end
-    local mouse = LocalPlayer:GetMouse()
-    local best, bd = nil, huge
-    for _, v in pairs(Players:GetPlayers()) do
-        if v == LocalPlayer or not v.Character then continue end
-        local hum = v.Character:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
-        local pp = v.Character.PrimaryPart; if not pp then continue end
-        if PlayerDead(v) or PlayerKnocked(v) then continue end
-        local sp = Camera:WorldToViewportPoint(pp.Position)
-        local d  = (V2(sp.X, sp.Y) - V2(mouse.X, mouse.Y)).Magnitude
-        if fovOn and d > fovSz then continue end
-        if d < bd then bd = d; best = v end
-    end
-    return best
-end
-
-local clMouse = LocalPlayer:GetMouse()
-clMouse.KeyDown:Connect(function(k)
-    if not cl["Enabled"] then return end
-    local key = (keybinds["Camlock Target"] or "C"):lower()
-    if k:lower() ~= key then return end
-    if CamLockActive then CamLockActive = false; CamLockTarget = nil
-    else
-        if CamLockTarget then CamLockActive = true
-        else CamLockTarget = CLGetClosest(); CamLockActive = CamLockTarget ~= nil end
-    end
-end)
-
-RunService:BindToRenderStep("VantaCamLock", Enum.RenderPriority.Camera.Value + 1, function()
-    if not cl["Enabled"] then return end
-    local fov = cl["FOV"] or {}
-    local mouse = LocalPlayer:GetMouse()
-    if fov["Enabled"] and fov["Show FOV"] and CamLockActive then
-        local sz = fov["Type"] == "2D" and ((fov["2D"] or {})["X"] or 20) or ((fov["3D"] or {})["X"] or 9)
-        CLFov.Radius = sz * 2; CLFov.Position = V2(mouse.X, mouse.Y); CLFov.Visible = true
-    else CLFov.Visible = false end
-
-    if not CamLockActive or not CamLockTarget then return end
-    if not CamLockTarget.Character then CamLockTarget = nil; CamLockActive = false; return end
-    local hum = CamLockTarget.Character:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then CamLockTarget = nil; CamLockActive = false; return end
-    local aimPart = CamLockTarget.Character:FindFirstChild("HumanoidRootPart"); if not aimPart then return end
-    local vel = aimPart.Velocity or V3(0,0,0)
-    local targetPos = aimPart.Position + vel * CLPrediction()
-    local targetCF  = CF(Camera.CFrame.Position, targetPos)
-    local smooth = (cl["Smoothness"] or {})["X"] or 0.04
-    Camera.CFrame = smooth > 0 and Camera.CFrame:Lerp(targetCF, clamp(1 - smooth, 0.01, 0.99)) or targetCF
-end)
+-- Camera lock intentionally removed per request:
+-- silent aim uses hook methods only and does not modify Camera.CFrame.
 
 -- ============================================================================
 -- MAIN HEARTBEAT
