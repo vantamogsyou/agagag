@@ -179,16 +179,13 @@ end
 
 local function GetPredicted(part, char)
     if not part or not part:IsA("BasePart") then return part.Position end
-    local vel  = part.AssemblyLinearVelocity or part.Velocity
-    local ping = GetPing()
-    local dist = (part.Position - Camera.CFrame.Position).Magnitude
-    local pred = 0.13 * max(dist/50, 0.4) + ping
-    local grav = V3(0,0,0)
-    if IsAirborne(char) then
-        pred = pred * 1.4
-        grav = V3(0, -0.5 * (Workspace.Gravity or 196.2) * pred^2, 0)
-    end
-    return part.Position + vel * pred + grav
+    local vel  = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
+    local pred = sa["Prediction"] or {}
+    return part.Position + V3(
+        vel.X * (pred["X"] or 0),
+        vel.Y * (pred["Y"] or 0),
+        vel.Z * (pred["Z"] or 0)
+    )
 end
 
 -- ============================================================================
