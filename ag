@@ -241,6 +241,20 @@ local function IsTacOrDB()
         or string.find(n, "shotgun", 1, true)
 end
 
+local function GetSilentPositionForWeapon(targetChar, defaultPart)
+    local part = defaultPart
+    if IsTacOrDB() then
+        -- Force strict center-mass for Tac/DB to avoid distance-style drift.
+        part = targetChar:FindFirstChild("HumanoidRootPart")
+            or targetChar:FindFirstChild("UpperTorso")
+            or targetChar:FindFirstChild("LowerTorso")
+            or defaultPart
+        return part, part and part.Position or nil
+    end
+    local pos = GetPredicted(part, targetChar)
+    return part, pos
+end
+
 local function IsAirborne(char)
     if not char then return false end
     local h = char:FindFirstChildOfClass("Humanoid"); if not h then return false end
@@ -422,21 +436,9 @@ local function GetSilentAimData()
         local mp   = UserInputService:GetMouseLocation()
         local part = GetTargetPart(target.Character, mp) or target.Character:FindFirstChild("HumanoidRootPart")
         if not part then return nil end
-        if IsTacOrDB() then
-            part = target.Character:FindFirstChild("HumanoidRootPart")
-                or target.Character:FindFirstChild("UpperTorso")
-                or target.Character:FindFirstChild("LowerTorso")
-                or part
-        end
-        local vel  = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
-        local pred = sa["Prediction"] or {}
-        local usePred = sa["Use Prediction"] ~= false
-        local mult = IsTacOrDB() and 0.18 or 1
-        local yOff = IsTacOrDB() and 0.12 or 0
-        local px = usePred and ((pred["X"] or 0) * mult) or 0
-        local py = usePred and ((pred["Y"] or 0) * mult) or 0
-        local pz = usePred and ((pred["Z"] or 0) * mult) or 0
-        local pos  = part.Position + V3(vel.X*px, vel.Y*py, vel.Z*pz) + V3(0, yOff, 0)
+        local pos
+        part, pos = GetSilentPositionForWeapon(target.Character, part)
+        if not part or not pos then return nil end
         return part, pos
     else
         if not SilentAimActive then return nil end
@@ -445,20 +447,10 @@ local function GetSilentAimData()
         local mp   = UserInputService:GetMouseLocation()
         local part = GetTargetPart(CurrentTarget.Character, mp) or CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
         if not part then return nil end
-        if IsTacOrDB() then
-            part = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-                or CurrentTarget.Character:FindFirstChild("UpperTorso")
-                or CurrentTarget.Character:FindFirstChild("LowerTorso")
-                or part
-            local vel = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
-            local pred = sa["Prediction"] or {}
-            local usePred = sa["Use Prediction"] ~= false
-            local px = usePred and ((pred["X"] or 0) * 0.18) or 0
-            local py = usePred and ((pred["Y"] or 0) * 0.18) or 0
-            local pz = usePred and ((pred["Z"] or 0) * 0.18) or 0
-            return part, part.Position + V3(vel.X*px, vel.Y*py, vel.Z*pz) + V3(0, 0.12, 0)
-        end
-        return part, GetPredicted(part, CurrentTarget.Character)
+        local pos
+        part, pos = GetSilentPositionForWeapon(CurrentTarget.Character, part)
+        if not part or not pos then return nil end
+        return part, pos
     end
 end
 
