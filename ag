@@ -138,7 +138,6 @@ local SpeedEnabled      = false
 local BaseSpeed         = 16
 local TriggerBotActive  = false
 local LastTriggerShot   = 0
-local LastRapidShot     = 0
 local CamLockActive     = false -- kept for HUD compatibility (camera lock removed)
 local CamLockTarget     = nil   -- kept for HUD compatibility (camera lock removed)
 local SuperJumpActive   = false
@@ -461,7 +460,11 @@ grm.__index = function(self, key)
     if not checkcaller() and self == Mouse then
         local part, pos = GetSilentAimData()
         if part and pos then
-            local dir = (pos - Camera.CFrame.Position).Unit
+            local delta = pos - Camera.CFrame.Position
+            if delta.Magnitude < 1e-4 then
+                return oldIndex(self, key)
+            end
+            local dir = delta.Unit
             if key == "Hit"     then return CF(pos, pos + dir)
             elseif key == "Target"  then return part
             elseif key == "UnitRay" then return Ray.new(Camera.CFrame.Position, dir)
@@ -483,8 +486,12 @@ local function ShouldRedirect()
 end
 
 local function RedirectedRay(ray)
-    local _, pos = GetSilentAimData(); if not pos then return ray end
-    return Ray.new(ray.Origin, (pos - ray.Origin).Unit * ray.Direction.Magnitude)
+    local _, pos = GetSilentAimData()
+    if not pos then return ray end
+    local delta = pos - ray.Origin
+    local mag = delta.Magnitude
+    if mag < 1e-4 then return ray end
+    return Ray.new(ray.Origin, delta.Unit * ray.Direction.Magnitude)
 end
 
 local oldFPOR, oldFPORWI, oldRC
@@ -507,7 +514,9 @@ pcall(function()
                 local _, pos = GetSilentAimData()
                 if pos then
                     local nd = pos - origin
-                    dir = nd.Unit * max(dir.Magnitude, nd.Magnitude)
+                    if nd.Magnitude >= 1e-4 then
+                        dir = nd.Unit * max(dir.Magnitude, nd.Magnitude)
+                    end
                 end
             end
         end
@@ -523,6 +532,9 @@ pcall(function()
             local _, pos = GetSilentAimData()
             if pos then
                 local dir = pos - origin
+                if dir.Magnitude < 1e-4 then
+                    return orig(origin, range)
+                end
                 return dir.Unit, math.min(dir.Magnitude, range)
             end
         end
@@ -730,7 +742,7 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Rapid Fire (non-camera): keeps cooldown-like values low and bursts while holding mouse
+    -- Rapid fire helper: only lowers cooldown values. Do NOT spam tool:Activate() — that breaks most guns.
     local rf = (wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {}
     if rf["Enabled"] then
         local char = LocalPlayer.Character
@@ -745,11 +757,6 @@ RunService.Heartbeat:Connect(function()
                     local r = gc:FindFirstChild(prop)
                     if r and (r:IsA("NumberValue") or r:IsA("IntValue")) then r.Value = cdv end
                 end
-            end
-            local interval = rf["Interval"] or 0.03
-            if isMouseDown and tick() - LastRapidShot >= interval then
-                LastRapidShot = tick()
-                tool:Activate()
             end
         end
     end
