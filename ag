@@ -14,6 +14,67 @@ local espCfg   = Vanta["ESP"]                 or {}
 local cm       = Vanta["Character Modifiers"] or {}
 local wm       = Vanta["Weapon Modifiers"]    or {}
 
+-- Optional compatibility bridge for shared.Glory-style configs.
+local Glory = rawget(shared, "Glory")
+if type(Glory) == "table" then
+    local gSettings = Glory["Settings"] or {}
+    local gKeys = Glory["Keybinds"] or {}
+    local gSilent = Glory["Silent Aim"] or {}
+    local gFov = Glory["FOV"] or {}
+    local gTB = Glory["Trigger Bot"] or {}
+    local gSpread = Glory["Spread"] or {}
+    local gSpeed = Glory["Speed"] or {}
+    local gVis = Glory["Visual Awareness"] or {}
+
+    checks["Visible"] = gSettings["Visible Check"] == true
+    checks["Knocked"] = gSettings["Knock Check"] == true
+
+    if type(gKeys["Target Lock"]) == "table" then
+        keybinds["Silent Target"] = gKeys["Target Lock"]["Key"] or keybinds["Silent Target"]
+    end
+    if type(gKeys["Trigger Bot"]) == "table" then
+        keybinds["Trigger Bot"] = gKeys["Trigger Bot"]["Key"] or keybinds["Trigger Bot"]
+        tb["Activation"] = tb["Activation"] or {}
+        tb["Activation"]["Type"] = gKeys["Trigger Bot"]["Mode"] or (tb["Activation"]["Type"] or "Toggle")
+    end
+    if type(gKeys["Speed"]) == "string" then
+        keybinds["Speed"] = gKeys["Speed"]
+    end
+
+    sa["Enabled"] = gSilent["Enabled"] ~= false
+    sa["Selection"] = "Target"
+    sa["StickyAim"] = true
+    sa["Use Prediction"] = gSilent["Use Prediction"] ~= false
+    sa["Hit Location"] = {
+        ["Hit Part"] = gSilent["Hit Part"] or "Closest Point"
+    }
+    sa["Prediction"] = gSilent["Prediction"] or sa["Prediction"] or {["X"] = 0, ["Y"] = 0, ["Z"] = 0}
+    sa["FOV"] = {
+        ["Enabled"] = gFov["Enabled"] == true,
+        ["Show FOV"] = gFov["Visible"] == true,
+        ["Type"] = "2D",
+        ["2D"] = {["X"] = gFov["Size"] or 20},
+        ["3D"] = {["X"] = gFov["Size"] or 12},
+    }
+
+    tb["Enabled"] = gTB["Enabled"] == true
+    tb["Delay"] = gTB["Delay"] or tb["Delay"] or 0
+
+    wm["Spread Modifiers"] = wm["Spread Modifiers"] or {}
+    wm["Spread Modifiers"]["Enabled"] = gSpread["Enabled"] == true
+    wm["Spread Modifiers"]["Amount"] = gSpread["Amount"] or 0
+
+    cm["Speed"] = cm["Speed"] or {}
+    cm["Speed"]["Enabled"] = gSpeed["Enabled"] == true
+    cm["Speed"]["Conditions"] = {["Normal"] = {["Multiplier"] = (gSpeed["Multiplier"] or 16) / 16}}
+    cm["Anti Fling"] = gSpeed["Anti Fling"] == true
+
+    espCfg["Enabled"] = gVis["Enabled"] == true
+    espCfg["Name"] = espCfg["Name"] or {}
+    espCfg["Name"]["Color"] = gVis["Color"] or espCfg["Name"]["Color"]
+    espCfg["Name"]["Target Color"] = gVis["Target Color"] or espCfg["Name"]["Target Color"]
+end
+
 -- ============================================================================
 -- KEY SYSTEM
 -- ============================================================================
@@ -77,6 +138,7 @@ local SpeedEnabled      = false
 local BaseSpeed         = 16
 local TriggerBotActive  = false
 local LastTriggerShot   = 0
+local LastRapidShot     = 0
 local CamLockActive     = false -- kept for HUD compatibility (camera lock removed)
 local CamLockTarget     = nil   -- kept for HUD compatibility (camera lock removed)
 local SuperJumpActive   = false
@@ -165,7 +227,18 @@ local function GetTargetPart(char, mp)
     if hp == "Head"          then return char:FindFirstChild("Head")
     elseif hp == "HumanoidRootPart" then return char:FindFirstChild("HumanoidRootPart")
     elseif hp == "UpperTorso" then return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    elseif hp == "Closest Part" then return GetClosestBodyPart(char, mp)
     else return GetClosestBodyPart(char, mp) end
+end
+
+local function IsTacOrDB()
+    local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+    local n = tool and string.lower(tool.Name) or ""
+    return string.find(n, "tactical", 1, true)
+        or string.find(n, "tac", 1, true)
+        or string.find(n, "double", 1, true)
+        or string.find(n, "db", 1, true)
+        or string.find(n, "shotgun", 1, true)
 end
 
 local function IsAirborne(char)
@@ -179,6 +252,7 @@ end
 
 local function GetPredicted(part, char)
     if not part or not part:IsA("BasePart") then return part.Position end
+    if sa["Use Prediction"] == false then return part.Position end
     local vel  = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
     local pred = sa["Prediction"] or {}
     return part.Position + V3(
@@ -348,9 +422,21 @@ local function GetSilentAimData()
         local mp   = UserInputService:GetMouseLocation()
         local part = GetTargetPart(target.Character, mp) or target.Character:FindFirstChild("HumanoidRootPart")
         if not part then return nil end
+        if IsTacOrDB() then
+            part = target.Character:FindFirstChild("HumanoidRootPart")
+                or target.Character:FindFirstChild("UpperTorso")
+                or target.Character:FindFirstChild("LowerTorso")
+                or part
+        end
         local vel  = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
         local pred = sa["Prediction"] or {}
-        local pos  = part.Position + V3(vel.X*(pred["X"] or 0), vel.Y*(pred["Y"] or 0), vel.Z*(pred["Z"] or 0))
+        local usePred = sa["Use Prediction"] ~= false
+        local mult = IsTacOrDB() and 0.18 or 1
+        local yOff = IsTacOrDB() and 0.12 or 0
+        local px = usePred and ((pred["X"] or 0) * mult) or 0
+        local py = usePred and ((pred["Y"] or 0) * mult) or 0
+        local pz = usePred and ((pred["Z"] or 0) * mult) or 0
+        local pos  = part.Position + V3(vel.X*px, vel.Y*py, vel.Z*pz) + V3(0, yOff, 0)
         return part, pos
     else
         if not SilentAimActive then return nil end
@@ -359,6 +445,19 @@ local function GetSilentAimData()
         local mp   = UserInputService:GetMouseLocation()
         local part = GetTargetPart(CurrentTarget.Character, mp) or CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
         if not part then return nil end
+        if IsTacOrDB() then
+            part = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+                or CurrentTarget.Character:FindFirstChild("UpperTorso")
+                or CurrentTarget.Character:FindFirstChild("LowerTorso")
+                or part
+            local vel = part.AssemblyLinearVelocity or part.Velocity or V3(0,0,0)
+            local pred = sa["Prediction"] or {}
+            local usePred = sa["Use Prediction"] ~= false
+            local px = usePred and ((pred["X"] or 0) * 0.18) or 0
+            local py = usePred and ((pred["Y"] or 0) * 0.18) or 0
+            local pz = usePred and ((pred["Z"] or 0) * 0.18) or 0
+            return part, part.Position + V3(vel.X*px, vel.Y*py, vel.Z*pz) + V3(0, 0.12, 0)
+        end
         return part, GetPredicted(part, CurrentTarget.Character)
     end
 end
@@ -635,6 +734,30 @@ RunService.Heartbeat:Connect(function()
                 if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then v.Value = range end
                 local gc = tool:FindFirstChild("Configuration") or tool:FindFirstChild("GunConfig")
                 if gc then local r = gc:FindFirstChild(prop); if r then r.Value = range end end
+            end
+        end
+    end
+
+    -- Rapid Fire (non-camera): keeps cooldown-like values low and bursts while holding mouse
+    local rf = (wm["Shoot Modifiers"] or {})["Cooldown Changer"] or {}
+    if rf["Enabled"] then
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            local cdv = rf["Value"] or 0
+            for _, prop in ipairs({"Cooldown","FireRate","ShootCooldown","Delay","ShootDelay"}) do
+                local v = tool:FindFirstChild(prop)
+                if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then v.Value = cdv end
+                local gc = tool:FindFirstChild("Configuration") or tool:FindFirstChild("GunConfig")
+                if gc then
+                    local r = gc:FindFirstChild(prop)
+                    if r and (r:IsA("NumberValue") or r:IsA("IntValue")) then r.Value = cdv end
+                end
+            end
+            local interval = rf["Interval"] or 0.03
+            if isMouseDown and tick() - LastRapidShot >= interval then
+                LastRapidShot = tick()
+                tool:Activate()
             end
         end
     end
